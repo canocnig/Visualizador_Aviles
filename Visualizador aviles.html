@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="cnig" content="yes">
+  <title>CartoCiudad + UA + plugins</title>
+
+  <!-- Estilo base API -->
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/assets/css/apiidee.ol.min.css">
+
+  <!-- Estilos plugins -->
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/plugins/locator/locator.ol.min.css" />
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/plugins/layerswitcher/layerswitcher.ol.min.css" />
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/plugins/mousesrs/mousesrs.ol.min.css" />
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/plugins/sharemap/sharemap.ol.min.css" />
+  <link rel="stylesheet" href="https://componentes.idee.es/api-idee/plugins/viewmanagement/viewmanagement.ol.min.css" />
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  </style>
+</head>
+
+<body>
+  <div id="mapjs" class="m-container"></div>
+
+  <!-- JS base API -->
+  <script src="https://componentes.idee.es/api-idee/vendor/browser-polyfill.js"></script>
+  <script src="https://componentes.idee.es/api-idee/js/apiidee.ol.min.js"></script>
+  <script src="https://componentes.idee.es/api-idee/js/configuration.js"></script>
+
+  <!-- JS plugins -->
+  <script src="https://componentes.idee.es/api-idee/plugins/locator/locator.ol.min.js"></script>
+  <script src="https://componentes.idee.es/api-idee/plugins/layerswitcher/layerswitcher.ol.min.js"></script>
+  <script src="https://componentes.idee.es/api-idee/plugins/mousesrs/mousesrs.ol.min.js"></script>
+  <script src="https://componentes.idee.es/api-idee/plugins/sharemap/sharemap.ol.min.js"></script>
+  <script src="https://componentes.idee.es/api-idee/plugins/viewmanagement/viewmanagement.ol.min.js"></script>
+
+  <script>
+    /* ==========================
+       MAPA + CONTROLES
+    ========================== */
+    const mapjs = IDEE.map({
+      container: 'mapjs',
+      controls: [
+        'panzoom',
+        'scale*true',
+        'scaleline',
+        'rotate',
+        'location',
+        'backgroundlayers'
+      ],
+      zoom: 13,
+      maxZoom: 20,
+      minZoom: 4,
+      center: [-659401.59, 5396513.85] // Gijón aprox. EPSG:3857
+    });
+
+    /* ==========================
+       WMS Unidades Administrativas (IGN)
+    ========================== */
+    const layerBoundary = new IDEE.layer.WMS({
+      url: 'https://www.ign.es/wms-inspire/unidades-administrativas?',
+      name: 'AU.AdministrativeBoundary',
+      legend: 'Límite administrativo',
+      tiled: false,
+      visibility: true
+    }, {});
+
+    const layerUA = new IDEE.layer.WMS({
+      url: 'https://www.ign.es/wms-inspire/unidades-administrativas?',
+      name: 'AU.AdministrativeUnit',
+      legend: 'Unidad administrativa',
+      tiled: false,
+      visibility: false
+    }, {});
+
+    /* ==========================
+       CARTOCIUDAD (GeoJSON filtrado)
+    ========================== */
+    const CARTOCIUDAD = new IDEE.layer.GeoJSON({
+      name: 'Direcciones (CP 33201)',
+      url: 'https://api-features.idee.es/collections/address/items?component_AdminUnitName_4=Avilés&limit=8000&f=json',
+      extract: true
+    });
+
+    mapjs.addLayers([layerBoundary, layerUA, CARTOCIUDAD]);
+
+    /* ==========================================================
+       ESTILO por zoom (SIN superposiciones / SIN “recarga”):
+       - <14: capa oculta (no flash de azul claro)
+       - [14,18): solo puntos (estilo de capa)
+       - >=18: puntos + etiqueta (estilo por feature)
+       ========================================================== */
+
+    const ZOOM_PUNTOS_DESDE = 14;
+    const ZOOM_ETIQUETA_DESDE = 18;
+
+    const COLOR_PUNTO = '#0B1F3A';
+    const COLOR_BORDE = '#061224';
+
+    // Estilo de capa: SOLO PUNTO (siempre igual)
+    const estiloSoloPunto = new IDEE.style.Generic({
+      point: {
+        radius: 4,
+        fill: { color: COLOR_PUNTO, opacity: 0.90 },
+        stroke: { color: COLOR_BORDE, width: 2 }
+      }
+    });
+
+    // Estilo por feature: PUNTO + ETIQUETA
+    function crearEstiloConEtiqueta(texto) {
+      return new IDEE.style.Generic({
+        point: {
+          radius: 4,
+          fill: { color: COLOR_PUNTO, opacity: 0.90 },
+          stroke: { color: COLOR_BORDE, width: 2 },
+          label: {
+            text: texto,
+            color: COLOR_PUNTO,
+            scale: 1.2,
+            baseline: (IDEE.style && IDEE.style.baseline) ? IDEE.style.baseline.BOTTOM : undefined,
+            align: (IDEE.style && IDEE.style.align) ? IDEE.style.align.CENTER : undefined
+          }
+        }
+      });
+    }
+
+    // IMPORTANTÍSIMO: aplicar estilo de capa YA (para no ver el estilo por defecto)
+    CARTOCIUDAD.setStyle(estiloSoloPunto);
+
+    // Y ocultar de inicio si el zoom inicial es < 14 (evita “flash”)
+    const zoomInicial = (typeof mapjs.getZoom === 'function') ? mapjs.getZoom() : 12;
+    CARTOCIUDAD.setVisible(zoomInicial >= ZOOM_PUNTOS_DESDE);
+
+    // helpers
+    function getFeaturesSafe() {
+      return (typeof CARTOCIUDAD.getFeatures === 'function') ? (CARTOCIUDAD.getFeatures() || []) : [];
+    }
+
+    // Limpia estilos por feature => elimina etiquetas / evita superposición
+    function limpiarEstilosPorFeature(feats) {
+      feats.forEach(f => {
+        if (f && typeof f.setStyle === 'function') {
+          f.setStyle(null); // clave para que NO se queden “pegadas” las etiquetas
+        }
+        // flag interno para no reestilar en bucle
+        if (f && typeof f.setAttribute === 'function') {
+          // algunas implementaciones no dejan setAttribute; si no existe, no pasa nada
+        }
+        if (f) f.__tieneEtiqueta = false;
+      });
+    }
+
+    // Aplica etiqueta solo si no está ya aplicada (evita “recargar”)
+    function aplicarEtiquetasPorFeature(feats) {
+      feats.forEach(f => {
+        if (!f || typeof f.setStyle !== 'function') return;
+
+        if (f.__tieneEtiqueta) return; // ya estilada con etiqueta
+
+        let num = null;
+        if (typeof f.getAttribute === 'function') {
+          num = f.getAttribute('locator_designator_addressNumber');
+        }
+
+        const texto = (num !== null && num !== undefined && String(num).trim() !== '')
+          ? String(num).trim()
+          : '';
+
+        f.setStyle(crearEstiloConEtiqueta(texto));
+        f.__tieneEtiqueta = true;
+      });
+    }
+
+    // Aplica la lógica en función del zoom
+    function actualizarSegunZoom(z) {
+      // 1) visibilidad <14
+      CARTOCIUDAD.setVisible(z >= ZOOM_PUNTOS_DESDE);
+      if (z < ZOOM_PUNTOS_DESDE) return;
+
+      const feats = getFeaturesSafe();
+      if (!feats.length) return;
+
+      // 2) [14,18): solo puntos (quitamos estilos por feature si venían de >=18)
+      if (z < ZOOM_ETIQUETA_DESDE) {
+        limpiarEstilosPorFeature(feats);
+        CARTOCIUDAD.setStyle(estiloSoloPunto);
+        return;
+      }
+
+      // 3) >=18: puntos + etiquetas (por feature)
+      // OJO: seguimos dejando el estilo de capa también, pero las features con setStyle lo sobreescriben.
+      CARTOCIUDAD.setStyle(estiloSoloPunto);
+      aplicarEtiquetasPorFeature(feats);
+    }
+
+    // Espera a carga inicial para que no falle getFeatures()
+    function esperarFeaturesYArrancar() {
+      const feats = getFeaturesSafe();
+      if (!feats.length) {
+        setTimeout(esperarFeaturesYArrancar, 200);
+        return;
+      }
+      // primera aplicación
+      const z = (typeof mapjs.getZoom === 'function') ? mapjs.getZoom() : zoomInicial;
+      actualizarSegunZoom(z);
+    }
+    esperarFeaturesYArrancar();
+
+    // Evento de cambio de zoom / resolución
+    const olMap = (typeof mapjs.getMapImpl === 'function') ? mapjs.getMapImpl() : null;
+    if (olMap && olMap.getView && olMap.getView()) {
+      olMap.getView().on('change:resolution', () => {
+        const z = olMap.getView().getZoom();
+        actualizarSegunZoom(z);
+      });
+    } else if (typeof mapjs.on === 'function') {
+      mapjs.on('zoom', () => {
+        const z = (typeof mapjs.getZoom === 'function') ? mapjs.getZoom() : zoomInicial;
+        actualizarSegunZoom(z);
+      });
+    }
+
+    /* ==========================
+       PLUGINS
+    ========================== */
+    const locator = new IDEE.plugin.Locator({ position: 'TC' });
+
+    const share = new IDEE.plugin.ShareMap({
+      baseUrl: 'https://componentes.idee.es/api-idee/',
+      position: 'BL'
+    });
+
+    const viewMgmt = new IDEE.plugin.ViewManagement();
+
+    const mouseSRS = new IDEE.plugin.MouseSRS({
+      srs: 'EPSG:4326',
+      label: 'WGS84',
+      precision: 6,
+      geoDecimalDigits: 4,
+      utmDecimalDigits: 2
+    });
+
+    const layerswitcher = new IDEE.plugin.Layerswitcher({
+      collapsed: true,
+      collapsible: true,
+      position: 'TL'
+    });
+
+    mapjs.addPlugin(locator);
+    mapjs.addPlugin(share);
+    mapjs.addPlugin(viewMgmt);
+    mapjs.addPlugin(mouseSRS);
+    mapjs.addPlugin(layerswitcher);
+  </script>
+</body>
+</html>
